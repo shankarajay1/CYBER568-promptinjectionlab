@@ -28,9 +28,29 @@
     color: var(--text);
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     display: grid;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
     height: 100vh;
   }
+  #brandBar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 16px;
+    background: linear-gradient(90deg, #0a1a3a 0%, #1a2752 100%);
+    border-bottom: 1px solid var(--border);
+    color: #fff;
+  }
+  #brandBar .logo {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 6px;
+    background: var(--accent); color: #0a0e16;
+    font-weight: 700; font-size: 16px;
+  }
+  #brandBar .course {
+    font-weight: 600; font-size: 14px; letter-spacing: 0.5px;
+  }
+  #brandBar .course-sub {
+    color: rgba(255,255,255,0.7); font-size: 12px;
+  }
+  #brandBar .spacer { flex: 1; }
   header {
     display: flex; align-items: center; gap: 12px;
     padding: 10px 16px;
@@ -206,15 +226,47 @@
   dialog button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
   .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
   code { background: var(--panel2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+  /* Progress + completion ID */
+  #progressPill {
+    font-size: 11px; padding: 3px 8px; border-radius: 10px;
+    background: var(--panel2); border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  #progressPill.done { color: var(--good); border-color: var(--good); }
+  #completeBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .progress-list { list-style: none; padding: 0; margin: 0 0 8px; }
+  .progress-list li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0; font-size: 13px; color: var(--muted);
+  }
+  .progress-list li.done { color: var(--good); }
+  .progress-list .check {
+    display: inline-block; width: 18px; text-align: center;
+  }
+  #completionIdBox {
+    background: var(--panel2); border: 1px solid var(--good);
+    border-radius: 6px; padding: 12px; margin-top: 8px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 16px;
+    color: var(--good); text-align: center; letter-spacing: 1px;
+    user-select: all;
+  }
 </style>
 </head>
 <body>
+<div id="brandBar">
+  <span class="logo">🔐</span>
+  <span class="course">Summer 2026.CYBER.5568.01</span>
+  <span class="course-sub">— LLM Security · Prompt Injection Lab</span>
+  <span class="spacer"></span>
+</div>
 <header>
   <h1>🧪 Prompt Injection Lab <span class="pill">Educational</span></h1>
   <select id="scenarioSelect" title="Choose attack scenario"></select>
   <button id="resetBtn" title="Reset conversation and context">↻ Reset</button>
   <button id="revealBtn" title="Spoiler — reveal the hidden system prompt">🔍 Reveal system prompt</button>
   <span class="spacer"></span>
+  <span id="progressPill" title="Scenarios you've successfully compromised">progress: 0/3</span>
   <span class="mode-pill" id="modePill">mode: mock</span>
   <button id="settingsBtn">⚙ Settings</button>
   <button id="helpBtn">❓ Help</button>
@@ -234,6 +286,16 @@
   </section>
 
   <section id="inspector">
+    <details class="section" open>
+      <summary>🏁 Your progress</summary>
+      <div class="body">
+        <ul class="progress-list" id="progressList"></ul>
+        <button id="completeBtn" disabled>🎓 Generate completion ID</button>
+        <button id="resetProgressBtn" class="secondary" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);font-weight:400;margin-left:6px;border-radius:6px;padding:8px 14px;cursor:pointer">Clear progress</button>
+        <div class="hint">Complete all three scenarios (each triggers a green "Compromised" banner), then generate your unique submission ID.</div>
+      </div>
+    </details>
+
     <details class="section">
       <summary>🎯 Win condition</summary>
       <div class="body">
@@ -303,6 +365,24 @@
   <div class="row">
     <button class="secondary" id="closeSettings">Cancel</button>
     <button id="saveSettings">Save</button>
+  </div>
+</dialog>
+
+<dialog id="completionDialog">
+  <h2>🎓 Generate completion ID</h2>
+  <p class="hint">Enter your full name exactly as it appears on the course roster. The ID is derived from your name + the scenarios you completed, so your instructor can verify it.</p>
+  <label>Full name
+    <input id="studentName" placeholder="e.g. Priya Ramachandran" autocomplete="name" />
+  </label>
+  <label>Course / cohort (optional)
+    <input id="studentCohort" placeholder="e.g. MSc CyberSec 2026" />
+  </label>
+  <div id="completionIdBox" hidden></div>
+  <div class="hint" id="completionMeta" style="text-align:center" hidden></div>
+  <div class="row">
+    <button class="secondary" id="closeCompletion">Close</button>
+    <button id="copyCompletion" hidden>📋 Copy ID</button>
+    <button id="generateCompletion">Generate</button>
   </div>
 </dialog>
 
@@ -913,7 +993,111 @@ function checkWin() {
     banner.hidden = false;
     banner.classList.add("success");
     banner.textContent = "✅ Compromised: " + result;
+    markScenarioComplete(state.scenarioId);
   }
+}
+
+// ---------- Progress + completion ID ----------
+const PROGRESS_KEY = "pil_completed_v1";
+function getCompleted() {
+  try { return new Set(JSON.parse(localStorage.getItem(PROGRESS_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+function saveCompleted(set) {
+  localStorage.setItem(PROGRESS_KEY, JSON.stringify([...set]));
+}
+function markScenarioComplete(id) {
+  const done = getCompleted();
+  if (done.has(id)) return;
+  done.add(id);
+  saveCompleted(done);
+  renderProgress();
+}
+function renderProgress() {
+  const done = getCompleted();
+  const ids = Object.keys(SCENARIOS);
+  const total = ids.length;
+  const count = ids.filter(id => done.has(id)).length;
+
+  const pill = document.getElementById("progressPill");
+  if (pill) {
+    pill.textContent = `progress: ${count}/${total}`;
+    pill.classList.toggle("done", count === total);
+  }
+
+  const list = document.getElementById("progressList");
+  if (list) {
+    list.innerHTML = "";
+    ids.forEach(id => {
+      const li = document.createElement("li");
+      const isDone = done.has(id);
+      if (isDone) li.classList.add("done");
+      li.innerHTML = `<span class="check">${isDone ? "✅" : "⬜"}</span> ${escapeHtml(SCENARIOS[id].name)}`;
+      list.appendChild(li);
+    });
+  }
+
+  const btn = document.getElementById("completeBtn");
+  if (btn) btn.disabled = count < total;
+}
+
+// SHA-256 → hex
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Deterministic completion ID: derived from name + cohort + sorted scenario ids + lab salt.
+// Instructor can re-derive the same ID from the same inputs to verify.
+const LAB_SALT = "PIL-v1-msc-cybersec";
+async function generateCompletionId(name, cohort) {
+  const done = [...getCompleted()].sort();
+  const normName = (name || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const normCohort = (cohort || "").trim().toLowerCase();
+  const payload = `${LAB_SALT}|${normName}|${normCohort}|${done.join(",")}`;
+  const hex = await sha256Hex(payload);
+  const grouped = hex.slice(0, 12).toUpperCase().match(/.{1,4}/g).join("-");
+  return { id: `PIL-${grouped}`, payload, scenarios: done };
+}
+
+async function onGenerateCompletion() {
+  const name = document.getElementById("studentName").value.trim();
+  const cohort = document.getElementById("studentCohort").value.trim();
+  if (!name) {
+    document.getElementById("studentName").focus();
+    return;
+  }
+  const { id, scenarios } = await generateCompletionId(name, cohort);
+  const box = document.getElementById("completionIdBox");
+  box.textContent = id;
+  box.hidden = false;
+  const meta = document.getElementById("completionMeta");
+  meta.textContent = `Verified completion of ${scenarios.length} scenario(s): ${scenarios.join(", ")} — ${new Date().toISOString().slice(0,10)}`;
+  meta.hidden = false;
+  const copyBtn = document.getElementById("copyCompletion");
+  copyBtn.hidden = false;
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(id);
+      copyBtn.textContent = "✅ Copied";
+      setTimeout(() => (copyBtn.textContent = "📋 Copy ID"), 1500);
+    } catch {
+      copyBtn.textContent = "Copy failed — select & copy manually";
+    }
+  };
+}
+
+function openCompletionDialog() {
+  document.getElementById("completionIdBox").hidden = true;
+  document.getElementById("completionMeta").hidden = true;
+  document.getElementById("copyCompletion").hidden = true;
+  document.getElementById("completionDialog").showModal();
+}
+
+function resetProgress() {
+  if (!confirm("Clear your local completion progress? This cannot be undone.")) return;
+  localStorage.removeItem(PROGRESS_KEY);
+  renderProgress();
 }
 
 // ---------- Scenario lifecycle ----------
@@ -1081,6 +1265,11 @@ function init() {
   document.getElementById("helpBtn").addEventListener("click", () => document.getElementById("helpDialog").showModal());
   document.getElementById("closeHelp").addEventListener("click", () => document.getElementById("helpDialog").close());
 
+  document.getElementById("completeBtn").addEventListener("click", openCompletionDialog);
+  document.getElementById("resetProgressBtn").addEventListener("click", resetProgress);
+  document.getElementById("closeCompletion").addEventListener("click", () => document.getElementById("completionDialog").close());
+  document.getElementById("generateCompletion").addEventListener("click", onGenerateCompletion);
+
   const form = document.getElementById("inputForm");
   const input = document.getElementById("userInput");
   form.addEventListener("submit", (e) => {
@@ -1100,6 +1289,7 @@ function init() {
   });
 
   updateModePill();
+  renderProgress();
   loadScenario(state.scenarioId);
 }
 
